@@ -70,8 +70,10 @@ def test_scan_safe_and_advanced(pc):
     assert not any(".pfs7" in i.where or i.where.endswith(".lnk") for i in safe)
     assert any(i.where.endswith("PhotoFrame Studio 7") for i in safe)
     adv = leftovers.scan(p, reg, places, "advanced", programs.list_programs(reg))
-    pubs = {i.where.split("/C/")[-1]: i for i in adv if i.where.rstrip("\\/").endswith(("Northbay", "Northbay Soft"))}
-    for holds_others in ("Program Files/Northbay", "ProgramData/Northbay", "HKCU\\Software\\Northbay Soft"):
+    def short(where):                     # the same text on Windows (\\) and elsewhere (/)
+        return where.replace("\\", "/").split("/C/")[-1]
+    pubs = {short(i.where): i for i in adv if i.where.rstrip("\\/").endswith(("Northbay", "Northbay Soft"))}
+    for holds_others in ("Program Files/Northbay", "ProgramData/Northbay", "HKCU/Software/Northbay Soft"):
         assert pubs[holds_others].shared and not pubs[holds_others].ticked              # other products inside
     only_this = pubs["Users/Studio/AppData/Roaming/Northbay"]
     assert not only_this.shared and only_this.ticked                                    # nothing else in it
