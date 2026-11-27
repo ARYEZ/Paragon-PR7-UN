@@ -22,6 +22,13 @@ the why.
   shared when they hold anything else. `remove` exports keys to a .reg (UTF-16, Regedit's format) first, then deletes
   them; folders go to `trash.send` (**PR7UN_TRASH** in tests). `export_reg` / `import_reg` are ours (Restore works on any
   Registry).
+- **Linux (PR7-OS)**: `linux.py` (no Qt) `Linux(root, home, run, root_run)`: `list_programs` (packages owning a shown
+  .desktop file, from /var/lib/dpkg/info/*.list + dpkg-query; Flatpak apps; `include_system` adds apt-mark's manual
+  ones; `PROTECTED` / essential / required = system), `exists` (the window's "still installed?": `self.reg` is the Linux
+  object there), `command` (pkexec apt-get remove / flatpak uninstall), `removal` (apt-get -s remove: refused when it
+  takes a PROTECTED package), `scan` (dpkg "config-files" -> purge, ~/.var/app/<id>, name forms in ~/.config,
+  ~/.local/share, ~/.cache, ~/.<name>; shared never ticked), `remove`. Programs have hive "apt" / "flatpak" (`kind`).
+  The window uses it when no registry is given on Linux (`MainWindow(linux=)` in tests). tests/test_linux.py.
 - `pr7un/runner.py`: ShellExecuteEx (uninstallers that need admin get Windows' prompt), `wait` follows the whole
   process tree (psutil; NSIS / Inno hand over to a copy) then gives the uninstall entry GRACE seconds to go.
 - `pr7un/main_window.py`: pages (programs, leftovers, batch), `ProgramModel` (plain list with batch checkboxes, never

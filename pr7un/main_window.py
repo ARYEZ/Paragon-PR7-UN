@@ -181,12 +181,18 @@ class OptionsDialog(QDialog):
 
 class MainWindow(QMainWindow):
     def __init__(self, reg: registry.Registry | None = None, places: leftovers.Places | None = None,
-                 sync: bool = False):
+                 sync: bool = False, linux=None):
         super().__init__()
         self.sync = sync
         self.answers: dict = {}
         self.said: list = []
-        self.reg = reg or registry.default()
+        # Linux (PR7-OS): apt / Flatpak programs (linux.py); it answers `exists` as the registry does. The tests' made-up
+        # PC (a registry given) stays Windows on any system.
+        if linux is None and reg is None and sys.platform.startswith("linux"):
+            from .linux import Linux
+            linux = Linux()
+        self.linux = linux
+        self.reg = linux if linux is not None else (reg or registry.default())
         self.places = places or leftovers.Places.here()
         self.all: list[Program] = []
         self.found: list[leftovers.Leftover] = []
@@ -528,10 +534,24 @@ class MainWindow(QMainWindow):
         except OSError:
             return False
 
+    # ================================================================ Windows or Linux
+    def _programs(self, include_system: bool) -> list[Program]:
+        if self.linux:
+            return self.linux.list_programs(include_system)
+        return programs.list_programs(self.reg, include_system=include_system)
+
+    def _scan(self, p: Program, mode: str, others: list[Program]) -> list:
+        if self.linux:
+            return self.linux.scan(p, others, mode)
+        return leftovers.scan(p, self.reg, self.places, mode, others)
+
+    def _command(self, p: Program, quiet: bool = False) -> list[str]:
+        return self.linux.command(p) if self.linux else p.command(quiet=quiet)
+
     # ================================================================ the list
     def refresh(self):
         def work():
-            got = programs.list_programs(self.reg, include_system=self.show_system.isChecked())
+            got = self._programs(self.show_system.isChecked())
             self.bridge.listed.emit(got)
         if self.sync:
             work()
@@ -605,15 +625,24 @@ class MainWindow(QMainWindow):
         """Revo's flow: confirm, run its own uninstaller, then look for leftovers (shown to tick and delete)."""
         if p is None or self.batch_running:
             return False
+        also = ""
+        if self.linux:                                  # apt removes what depends on it: asked first
+            others_gone, refused = self.linux.removal(p)
+            if refused:
+                self._say("error", refused)
+                return False
+            if others_gone:
+                also = "\n\napt also removes what needs it: " + ", ".join(others_gone[:12]) + \
+                    (f" and {len(others_gone) - 12} more" if len(others_gone) > 12 else "") + "."
         if not self._ask("confirm", f"Uninstall {p.name}?\n\nIts own uninstaller runs first; then PR7-UN looks for "
-                                    "what it left behind."):
+                                    "what it left behind." + also):
             return False
-        args = p.command(quiet=False)
+        args = self._command(p)
         if not args or not args[0]:
             self._say("error", f"{p.name} has no uninstaller to run.")
             return False
         self.status.setText(f"Uninstalling {p.name}…")
-        others = programs.list_programs(self.reg, include_system=True)
+        others = self._programs(True)
         mode = settings.get("mode", "moderate") or "moderate"
 
         def work():
@@ -625,7 +654,7 @@ class MainWindow(QMainWindow):
                 self.bridge.uninstalled.emit(p, None)
                 return
             others_now = [o for o in others if self.reg.exists(o.hive, o.key)]
-            self.bridge.uninstalled.emit(p, leftovers.scan(p, self.reg, self.places, mode, others_now))
+            self.bridge.uninstalled.emit(p, self._scan(p, mode, others_now))
         if self.sync:
             work()
         else:
@@ -652,7 +681,7 @@ class MainWindow(QMainWindow):
         if p is None:
             return None
         mode = settings.get("mode", "moderate") or "moderate"
-        found = leftovers.scan(p, self.reg, self.places, mode, [o for o in self.all if o.key != p.key])
+        found = self._scan(p, mode, [o for o in self.all if o.key != p.key])
         found = [i for i in found if not (i.kind == "key" and i.path.casefold() == p.key.casefold())] + \
             [i for i in found if i.kind == "key" and i.path.casefold() == p.key.casefold()]
         for i in found:
@@ -737,7 +766,7 @@ class MainWindow(QMainWindow):
         settings.set("mode", mode)
         p = self.found_for
         still = self.reg.exists(p.hive, p.key)
-        found = leftovers.scan(p, self.reg, self.places, mode, [o for o in self.all if o.key != p.key])
+        found = self._scan(p, mode, [o for o in self.all if o.key != p.key])
         if still:
             for i in found:
                 i.ticked = False
@@ -759,7 +788,8 @@ class MainWindow(QMainWindow):
                                     "to the Recycle Bin; registry keys are saved to a backup first."):
             return None
         name = self.found_for.name if self.found_for else "leftovers"
-        r = leftovers.remove(self.found, self.reg, os.path.join(data_dir(), "backups"), name)
+        r = self.linux.remove(self.found) if self.linux else \
+            leftovers.remove(self.found, self.reg, os.path.join(data_dir(), "backups"), name)
         msg = f"Removed {r.keys} registry key{'s' if r.keys != 1 else ''} and {r.folders} folder" \
               f"{'s' if r.folders != 1 else ''} ({bytes_text(r.bytes) or '0 bytes'})."
         if r.errors:
@@ -827,7 +857,7 @@ class MainWindow(QMainWindow):
         self._stop_batch.clear()
         quiet, scan_after = self.batch_quiet.isChecked(), self.batch_scan.isChecked()
         mode = settings.get("mode", "moderate") or "moderate"
-        everything = programs.list_programs(self.reg, include_system=True)
+        everything = self._programs(True)
         self._sync()
 
         def work():
@@ -836,7 +866,7 @@ class MainWindow(QMainWindow):
                     break
                 p = b["program"]
                 self.bridge.batch_step.emit(i, "Uninstalling…")
-                started = self._ask("run", (p.command(quiet=quiet and p.can_be_quiet), p))
+                started = self._ask("run", (self._command(p, quiet and p.can_be_quiet), p))
                 if not started:
                     self.bridge.batch_step.emit(i, "Still installed  ·  its uninstaller didn't start")
                     continue
@@ -845,7 +875,7 @@ class MainWindow(QMainWindow):
                     continue
                 if scan_after:
                     left = [o for o in everything if o.key != p.key and self.reg.exists(o.hive, o.key)]
-                    b["found"] = leftovers.scan(p, self.reg, self.places, mode, left)
+                    b["found"] = self._scan(p, mode, left)
                     n = len(b["found"])
                     self.bridge.batch_step.emit(i, f"Done  ·  {n} leftover{'s' if n != 1 else ''} found" if n else
                                                 "Done  ·  no leftovers")

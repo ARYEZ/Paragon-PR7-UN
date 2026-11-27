@@ -21,7 +21,7 @@ LISTS = [("HKLM", r"SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall", "machi
          ("HKLM", r"SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall", "machine (32-bit)"),
          ("HKCU", UNINSTALL, "per user")]
 GUID = re.compile(r"^\{[0-9A-Fa-f-]{36}\}$")
-KIND_NAMES = {"inno": "Inno Setup", "msi": "Windows Installer", "nsis": "NSIS", "other": "Its own uninstaller"}
+KIND_NAMES = {"apt": "apt", "flatpak": "Flatpak", "inno": "Inno Setup", "msi": "Windows Installer", "nsis": "NSIS", "other": "Its own uninstaller"}
 
 
 @dataclass
@@ -48,6 +48,8 @@ class Program:
 
     @property
     def kind(self) -> str:
+        if self.hive in ("apt", "flatpak"):                 # Linux (PR7-OS): linux.py's programs
+            return self.hive
         if self.msi or (GUID.match(self.key_name) and "msiexec" in self.uninstall.lower()):
             return "msi"
         if self.key_name.lower().endswith("_is1"):
@@ -59,7 +61,7 @@ class Program:
 
     @property
     def can_be_quiet(self) -> bool:
-        return bool(self.quiet_uninstall) or self.kind in ("inno", "msi", "nsis")
+        return bool(self.quiet_uninstall) or self.kind in ("inno", "msi", "nsis", "apt", "flatpak")
 
     @property
     def needs_admin(self) -> bool:
